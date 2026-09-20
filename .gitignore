@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 运行时数据（含任务记录与成品，不要提交）
+data/
+media/
+log/
+
+# 出口池：订阅链接与 mihomo 运行时产物（含凭据）
+mihomo/subscription.txt
+mihomo/config.yaml
+mihomo/providers/
+mihomo/cache.db
+mihomo/log/
+mihomo/mihomo
+
+# 环境变量（可能含 API key）
+.env
+
+# 演示媒体
+*.mp4
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.bak

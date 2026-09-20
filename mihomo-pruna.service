@@ -1,0 +1,19 @@
+[Unit]
+Description=mihomo - dedicated instance for pruna2api (subscription-based egress pool)
+Documentation=https://github.com/MetaCubeX/mihomo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pruna
+WorkingDirectory=/opt/pruna2api/mihomo
+ExecStart=/opt/pruna2api/mihomo/mihomo -d /opt/pruna2api/mihomo -f config.yaml
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+StandardOutput=append:/opt/pruna2api/mihomo/log/mihomo.log
+StandardError=append:/opt/pruna2api/mihomo/log/mihomo.log
+
+[Install]
+WantedBy=multi-user.target

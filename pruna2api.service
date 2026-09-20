@@ -1,0 +1,27 @@
+[Unit]
+Description=pruna2api - Pruna Playground reverse proxy (OpenAI compatible)
+Documentation=https://github.com/YOUR_GITHUB_USER/pruna2api
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 改成运行服务的系统用户
+User=pruna
+WorkingDirectory=/opt/pruna2api
+Environment=PRUNA_PORT=3020
+Environment=PRUNA_DATA_DIR=/opt/pruna2api/data
+Environment=PRUNA_MEDIA_DIR=/opt/pruna2api/media
+# 对公网开放前必须设置
+Environment=PRUNA_API_KEY=
+# 留空则按请求 Host 拼
+Environment=PRUNA_PUBLIC_BASE=
+Environment=PRUNA_MAX_WORKERS=4
+ExecStart=/opt/pruna2api/venv/bin/python /opt/pruna2api/main.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/pruna2api/log/service.log
+StandardError=append:/opt/pruna2api/log/service.log
+
+[Install]
+WantedBy=multi-user.target

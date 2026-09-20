@@ -1,0 +1,132 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ui-e2e</title>
+<style>body{background:#111;color:#ddd;font:12px monospace;margin:0}
+#log{padding:10px;white-space:pre-wrap}
+iframe{width:1360px;height:900px;border:0;display:block}
+</style></head><body>
+<iframe id="fr" src="/?tab=gen"></iframe>
+<div id="log"></div>
+<script>
+const L = [];
+function log(s){ L.push(s); document.getElementById('log').textContent = L.join('\n'); }
+window.onerror = e => log('PAGE ERROR: ' + e);
+
+const fr = document.getElementById('fr');
+fr.onload = () => {
+  const w = fr.contentWindow, d = fr.contentDocument;
+  log('iframe loaded: ' + w.location.href);
+
+  // 等待模型下拉被填充
+  let tries = 0;
+  const iv = setInterval(() => {
+    tries++;
+    const sel = d.getElementById('f-model');
+    const opts = sel ? sel.options.length : 0;
+    if (opts >= 12) {
+      clearInterval(iv);
+      log('OK 模型下拉: ' + opts + ' 个选项');
+      log('   当前选中: ' + sel.value);
+      checkChrome(w, d);
+    } else if (tries > 40) {
+      clearInterval(iv);
+      log('FAIL 模型下拉只有 ' + opts + ' 个选项');
+      done();
+    }
+  }, 250);
+};
+
+/* ---- 新增：验证侧边栏布局与概览页 ---- */
+function checkChrome(w, d){
+  const nav = d.querySelectorAll('.sidebar nav button');
+  log('侧边栏导航项: ' + nav.length + ' → ' + [...nav].map(b => b.dataset.page).join(', '));
+  log('侧边栏品牌: ' + (d.querySelector('.brand b') || {}).textContent);
+  log('.page 节数: ' + d.querySelectorAll('.page').length);
+  log('当前页标题: ' + d.getElementById('ph-title').textContent);
+
+  if (nav.length !== 5) { log('FAIL 导航项应为 5 个'); done(); return; }
+
+  // 切到概览（index 0）
+  nav[0].click();
+  setTimeout(() => {
+    log('切到概览 → .page.on = ' + (d.querySelector('.page.on') || {}).id);
+    log('   标题 = ' + d.getElementById('ph-title').textContent);
+    log('   指标: 出口=' + d.getElementById('h-exits').textContent
+        + ' | 完成=' + d.getElementById('h-done').textContent
+        + ' | 失败=' + d.getElementById('h-fail').textContent
+        + ' | 进行=' + d.getElementById('h-run').textContent);
+    log('   出口迷你格: ' + d.querySelectorAll('#h-exgrid .e').length + ' 个');
+    log('   最近任务表行: ' + d.querySelectorAll('#h-recent tr').length);
+    log('   快速开始按钮: ' + d.querySelectorAll('#h-quick .qbtn').length);
+    log('   侧栏状态: ' + d.getElementById('f-health').textContent
+        + ' / 模型 ' + d.getElementById('f-models').textContent);
+
+    // 侧栏底部与顶栏 pill 是否都拿到了数据
+    const okHome = d.getElementById('h-exits').textContent.includes('/')
+                && d.querySelectorAll('#h-exgrid .e').length === 8;
+    log(okHome ? 'OK 概览页数据已加载' : 'FAIL 概览页数据缺失');
+
+    // 切回生成页继续原测试
+    d.querySelector('.sidebar nav button[data-page="gen"]').click();
+    setTimeout(() => runTest(w, d), 900);
+  }, 1600);
+}
+
+async function runTest(w, d){
+  // 1) 填提示词
+  d.getElementById('f-prompt').value = 'ui e2e test: a small blue circle pulsing';
+  log('OK 已填提示词');
+
+  // 2) 缩短时长 + 低分辨率，加快出片
+  d.getElementById('f-dur').value = '5';
+  const res = d.getElementById('f-res');
+  if ([...res.options].some(o => o.value === '480p')) res.value = '480p';
+  log('OK 参数: res=' + res.value + ' dur=' + d.getElementById('f-dur').value);
+
+  // 3) 检查「参考图」区在当前模型下的显隐
+  const wrap = d.getElementById('wrap-img');
+  log('OK 参考图区 display=' + (wrap.style.display || 'block(default)'));
+  const vwrap = d.getElementById('wrap-video');
+  log('OK 源视频区 display=' + (vwrap.style.display || 'block(default)'));
+
+  // 4) 真的点开始生成
+  log('--> 点击「开始生成」…');
+  const t0 = Date.now();
+  d.getElementById('btn-run').click();
+
+  // 5) 轮询结果区
+  const iv2 = setInterval(() => {
+    const r = d.getElementById('result');
+    const html = r.innerHTML;
+    const secs = ((Date.now()-t0)/1000).toFixed(0);
+    if (html.includes('<video') || html.includes('video src')){
+      clearInterval(iv2);
+      const url = (html.match(/src="([^"]+\.mp4[^"]*)"/) || [])[1] || '?';
+      log('OK 生成完成，用时 ' + secs + 's');
+      log('   成品 URL: ' + url);
+      log('   结果区含 video 标签: ' + /<video/.test(html));
+      log('   结果区含下载按钮: ' + /download/.test(html));
+      // 验证视频真能加载
+      const v = d.querySelector('#result video');
+      if (v){
+        v.onloadedmetadata = () => log('OK 视频元数据已加载: ' + v.videoWidth + 'x' + v.videoHeight + ' ' + v.duration.toFixed(1) + 's');
+        v.onerror = () => log('FAIL 视频加载失败');
+      }
+      setTimeout(done, 3500);
+    } else if (html.includes('失败') || html.includes('bad')){
+      clearInterval(iv2);
+      log('FAIL 提交失败: ' + html.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,300));
+      done();
+    } else if (secs > 240){
+      clearInterval(iv2);
+      log('TIMEOUT 240s 未完成');
+      done();
+    }
+  }, 1000);
+}
+
+function done(){
+  log('=== TEST FINISHED ===');
+  document.title = 'DONE';
+}
+</script>
+</body></html>
