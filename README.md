@@ -268,6 +268,63 @@ proxy-groups:
 
 ---
 
+### 6. 提交与状态查询**必须共享会话**（2026-09 新增要求）
+
+上游现在会给 `generate` 下发会话，`status` 查询**必须在同一会话里**，否则一律返回
+`404 {"error":"Not found"}` —— 表现为「任务提交成功但一直轮询到超时」。
+
+```python
+session = requests.Session()          # 贯穿提交 + 轮询
+r = session.post(generate_url, ...)   # 提交
+...                                   # 用同一个 session 轮询
+```
+
+⚠️ 别用裸 `requests.get` 轮询，每次调用都是新会话。
+
+### 7. `resolution` 枚举会变，别写死
+
+上游调整过各模型的合法分辨率，实测（2026-09-22）：
+
+| 模型 | 合法值 |
+|---|---|
+| `p-video-2-pro` | `480p` / `768p` |
+| `p-video-2`、`p-video` | `720p` / `1080p`（**`480p` 已被移除**） |
+| 图片模型 | 无此参数 |
+
+写死会导致 `property resolution validation failed`。服务通过
+`/api/generation-status?model=X` 实时读取模型状态（配额、是否下线），
+`GET /v1/models` 会返回 `remaining_per_ip` 与 `disabled`。
+
+### 8. ⚠️ 上游把「参数错误」包装成 HTTP 500
+
+这是个很容易踩的大坑。给 `p-video-2` 传非法 `resolution`，上游返回的是：
+
+```
+HTTP 500  {"error":"property input validation failed: property resolution validation failed:
+           matches none of the enum values"}
+```
+
+**是 500 而不是 400**。如果按「5xx = 瞬时故障」处理，就会在每个出口上重试一轮，
+**把所有出口逐个冷却掉**（实测一次错误参数可以让 40 个出口进冷却）。
+
+所以错误分类里必须识别这类响应：
+
+```python
+_PARAM_ERROR_MARKERS = ("input validation failed", "matches none of the enum values",
+                        "invalid property", "MODEL_DISABLED",
+                        "This model is temporarily unavailable")
+
+if r.status_code >= 500 and _is_param_error(r.text):
+    raise DeterministicError(...)   # 与出口无关，直接失败
+```
+
+### 9. 模型会被临时下线
+
+`p-video-2-pro` 在 2026-09 被上游标记为 `MODEL_DISABLED`，直接提交会返回
+`{"error":"This model is temporarily unavailable","code":"MODEL_DISABLED"}`。
+服务的做法：提交前查 `generation-status`，`disabled: true` 就拦掉，并让 `/v1/models`
+把 `disabled` 透出给前端（控制台会把该模型禁选）。
+
 ## 配置
 
 所有配置走环境变量（见 `.env.example`）：

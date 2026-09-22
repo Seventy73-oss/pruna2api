@@ -35,6 +35,7 @@ import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlparse
@@ -60,8 +61,11 @@ from pruna_client import (
     PrunaClient,
     QuotaExhausted,
     TaskFailedAfterSubmit,
+    fetch_model_status,
+    is_model_disabled,
     load_image_bytes,
     load_subscription_exits,
+    quota_of,
 )
 
 # ---------------------------------------------------------------- 配置
@@ -294,6 +298,17 @@ def validate_request(model: str, prompt: str | None, n_imgs: int, has_video: boo
         bad(f"模型 {model} 需要至少 1 张参考图（image 或 images 字段）", "image")
     if not (prompt or "").strip() and n_imgs == 0 and not has_video:
         bad("至少要提供 prompt、一张参考图或一段源视频中的一个", "prompt")
+    # 上游临时下线的模型（如 2026-09 的 p-video-2-pro，generation-status 里 disabled:true）
+    # 提前拦掉，免得白跑一个出口、白扣一次配额
+    if is_model_disabled(model):
+        raise HTTPException(status_code=400, detail={
+            "error": {
+                "message": f"模型 {model} 当前被上游下线（temporarily unavailable），请换其他模型",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "model_disabled",
+            }
+        })
 
 
 # ---------------------------------------------------------------- 任务执行
@@ -476,17 +491,32 @@ def health():
 
 
 @app.get("/v1/models")
-def list_models():
+def list_models(refresh: bool = False):
+    """列模型。
+
+    配额与可用性取自上游 /api/generation-status（60s 缓存，`?refresh=1` 强制刷新），
+    查不到时回落到本地 MODEL_QUOTA 常量。并发查询避免逐个串行拖慢响应。
+    """
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        sts = list(ex.map(
+            lambda m: fetch_model_status(m, use_cache=not refresh), ALL_MODELS))
+
     data = []
-    for m in ALL_MODELS:
-        kind = "image" if m in IMAGE_MODELS else "video"
-        data.append({
+    for m, st in zip(ALL_MODELS, sts):
+        item = {
             "id": m,
             "object": "model",
             "owned_by": "pruna",
-            "kind": kind,
-            "free_quota_per_ip": MODEL_QUOTA.get(m, DEFAULT_QUOTA),
-        })
+            "kind": "image" if m in IMAGE_MODELS else "video",
+            "free_quota_per_ip": (
+                int(st["max"]) if st.get("max")
+                else MODEL_QUOTA.get(m, DEFAULT_QUOTA)),
+        }
+        if st:
+            item["remaining_per_ip"] = st.get("remaining")
+            item["disabled"] = bool(st.get("disabled"))
+            item["can_generate"] = bool(st.get("canGenerate"))
+        data.append(item)
     return {"object": "list", "data": data}
 
 

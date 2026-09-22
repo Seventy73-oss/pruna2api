@@ -43,6 +43,62 @@ def generate_url(model: str) -> str:
 def status_url(model: str, job_id: str) -> str:
     return BASE + STATUS_PATH.format(model=model, job_id=job_id)
 
+
+# ------------------------------------------------- 实时模型状态（上游新端点）
+# 2026-09 上游新增 /api/generation-status?model=X，返回：
+#   {"count":4,"max":5,"remaining":1,"canGenerate":true,"disabled":false,"model":"p-video-2"}
+# 用它替代硬编码配额，并能提前发现「被下线的模型」（如 p-video-2-pro 的 disabled:true）。
+MODEL_STATUS_TTL = 60
+_model_status_cache: dict[str, tuple[float, dict]] = {}
+_model_status_lock = threading.Lock()
+
+
+def fetch_model_status(model: str, proxies=None, timeout: int = 12,
+                       use_cache: bool = True) -> dict:
+    """查询单个模型的实时配额与可用性（带 TTL 缓存）。
+
+    返回 `{}` 表示查询失败 —— 调用方应回落到 `MODEL_QUOTA` 常量。
+    """
+    now = time.time()
+    if use_cache:
+        with _model_status_lock:
+            hit = _model_status_cache.get(model)
+        if hit and now - hit[0] < MODEL_STATUS_TTL:
+            return hit[1]
+
+    try:
+        r = requests.get(
+            f"{BASE}/api/generation-status?model={model}",
+            timeout=timeout,
+            proxies=proxies or {"http": None, "https": None},
+        )
+        if r.status_code != 200:
+            return {}
+        d = r.json()
+    except (requests.RequestException, ValueError):
+        return {}
+
+    if not isinstance(d, dict) or "max" not in d:
+        return {}
+
+    with _model_status_lock:
+        _model_status_cache[model] = (now, d)
+    return d
+
+
+def quota_of(model: str) -> int:
+    """该模型每出口的免费额度：优先用实时值，失败回落到常量。"""
+    st = fetch_model_status(model)
+    if st.get("max"):
+        return int(st["max"])
+    return MODEL_QUOTA.get(model, DEFAULT_QUOTA)
+
+
+def is_model_disabled(model: str) -> bool:
+    """模型是否被上游下线（查不到状态时视为可用，不误伤）。"""
+    return bool(fetch_model_status(model).get("disabled"))
+
+
 # ---------------------------------------------------------------- 模型定义
 
 IMAGE_MODELS = ["p-image", "p-image-ideogram", "p-image-edit", "p-image-upscale", "p-image-try-on"]
@@ -57,12 +113,20 @@ VIDEO_MODELS = [
 ]
 ALL_MODELS = IMAGE_MODELS + VIDEO_MODELS
 
-# 各模型免费额度（每出口 IP 独立计数，来自逆向 + 实测）
+# 各模型免费额度（每出口 IP 独立计数）
+# ⚠️ 2026-09-22 实测修正：**所有视频模型的 max 都是 5**（此前 p-video-2 记的是 10，是错的）；
+#    图片模型 10。真实值可用 /api/generation-status?model=X 实时查询，
+#    这里的常量只作为查不到时的兜底。
 MODEL_QUOTA = {
     "p-video-2-pro": 5,
-    "p-video-2": 10,
+    "p-video-2": 5,
+    "p-video": 5,
+    "p-video-avatar": 5,
+    "p-video-animate": 5,
+    "p-video-replace": 5,
+    "p-video-edit": 5,
 }
-DEFAULT_QUOTA = 10
+DEFAULT_QUOTA = 10          # 图片类模型
 
 # 需要图片输入的模型及其字段名（单数 image / 复数 images / 专用字段）
 # None 表示可选
@@ -132,18 +196,18 @@ CLASH_SELECTOR = os.environ.get("PRUNA_CLASH_SELECTOR", "良心云")
 # 系统 clash 上实测可用的固定出口
 # ⚠️ 不含 direct：NAS 本身无直连外网出口（clash TUN 接管），直连必失败
 SYSTEM_EXITS = [
-    Exit("us01", "🇺🇸 US-1", "http://127.0.0.1:7890"),
-    Exit("us02", "🇺🇸 US-2", "http://127.0.0.1:7890"),
-    Exit("us03", "🇺🇸 US-3", "http://127.0.0.1:7890"),
-    Exit("us04", "🇺🇸 US-4", "http://127.0.0.1:7890"),
-    Exit("us05", "🇺🇸 US-5", "http://127.0.0.1:7890"),
-    Exit("uk01", "🇬🇧 UK-1", "http://127.0.0.1:7890"),
-    Exit("uk02", "🇬🇧 UK-2", "http://127.0.0.1:7890"),
+    Exit("us01", "🇺🇸 US-01", "http://127.0.0.1:7890"),
+    Exit("us02", "🇺🇸 US-02", "http://127.0.0.1:7890"),
+    Exit("us03", "🇺🇸 US-03", "http://127.0.0.1:7890"),
+    Exit("us04", "🇺🇸 US-04", "http://127.0.0.1:7890"),
+    Exit("us05", "🇺🇸 US-05", "http://127.0.0.1:7890"),
+    Exit("uk01", "🇬🇧 UK-01", "http://127.0.0.1:7890"),
+    Exit("uk02", "🇬🇧 UK-02", "http://127.0.0.1:7890"),
     Exit("gost", None, "http://127.0.0.1:8082"),   # gost 独立出口（示例）
 ]
 NAS_EXITS = SYSTEM_EXITS          # 向后兼容别名
 
-# 国旗 emoji → 地区码，用于把 `🇭🇰香港01` 这类节点名压成短 ID
+# 国旗 emoji → 地区码，用于把 `🇭🇰香港高速01` 这类节点名压成短 ID
 _FLAG_CODES = {
     "🇭🇰": "hk", "🇹🇼": "tw", "🇯🇵": "jp", "🇰🇷": "kr", "🇸🇬": "sg", "🇲🇴": "mo",
     "🇺🇸": "us", "🇬🇧": "uk", "🇩🇪": "de", "🇫🇷": "fr", "🇳🇱": "nl", "🇨🇭": "ch",
@@ -166,7 +230,7 @@ def _region_of(node: str) -> str:
 def load_subscription_exits(timeout: int = 10) -> list[Exit]:
     """从自带 mihomo 的 proxy-group 枚举订阅节点，构建出口池。
 
-    节点名形如 `🇭🇰香港01`，压成 `hk01` 这样的短 ID 便于展示；
+    节点名形如 `🇭🇰香港高速01`，压成 `hk01` 这样的短 ID 便于展示；
     完整节点名留在 `Exit.node` 里，用于控制面切换。
     """
     try:
@@ -437,14 +501,18 @@ class PrunaClient:
 
     # ---- 底层 POST：multipart 强制 ----
 
-    def _post(self, url: str, *, fields: dict, files: list, proxies, timeout: int = 180):
+    def _post(self, url: str, *, fields: dict, files: list, proxies,
+              timeout: int = 180, session: requests.Session | None = None):
         """
         Pruna 的 /generate 走 multipart。
         ⚠️ 没有图片时也必须塞一个占位文件字段，否则服务端按 JSON 解析并 500。
+        ⚠️ 传入 session 时复用它（cookie 要延续到后续的 status 查询）。
         """
         files = list(files)
         if not files:
             files.append(("__force_multipart", ("", b"", "application/octet-stream")))
+        if session is not None:
+            return session.post(url, data=fields, files=files, timeout=timeout)
         return requests.post(url, data=fields, files=files, proxies=proxies, timeout=timeout)
 
     @staticmethod
@@ -466,6 +534,27 @@ class PrunaClient:
                 raise PayloadFormatError(
                     "请求体编码方式被上游拒绝（multipart/JSON 用错了）。原始响应: " + txt)
 
+    #: 上游把「参数/模型问题」也包装成 HTTP 500，这些特征串说明问题不在出口
+    _PARAM_ERROR_MARKERS = (
+        "input validation failed",
+        "matches none of the enum values",
+        "invalid property",
+        "MODEL_DISABLED",
+        "This model is temporarily unavailable",
+    )
+
+    @staticmethod
+    def _is_param_error(text: str) -> bool:
+        """5xx 响应体是否其实是「参数/模型问题」。
+
+        实测（2026-09）：给 p-video-2 传非法 resolution，上游返回的是
+        **HTTP 500** + `{"error":"property input validation failed: ... matches none of
+        the enum values"}`。若按「5xx=瞬时故障」处理，会在每个出口上重试一轮，
+        把整个出口池冷却掉 —— 这类错误必须判为确定性错误。
+        """
+        t = (text or "")[:600]
+        return any(m in t for m in PrunaClient._PARAM_ERROR_MARKERS)
+
     @staticmethod
     def _http_error(r: requests.Response, tag: str = "") -> Exception:
         """按状态码把 HTTP 错误分类。
@@ -473,9 +562,13 @@ class PrunaClient:
         - **4xx（429 已单独处理）** → `DeterministicError`：参数非法 / 端点不存在 /
           模型不存在。换出口重试结果完全相同，必须直接失败。
         - **5xx** → `RuntimeError`：上游瞬时故障，值得换一个出口重试。
+          ⚠️ 例外：上游把「参数校验失败」「模型已下线」也包成 500，
+             这类要判成 `DeterministicError`，否则会重试到把出口池冷却光。
         """
         msg = f"HTTP {r.status_code}{' ' + tag if tag else ''}: {r.text[:300]}"
         if 400 <= r.status_code < 500:
+            return DeterministicError(msg)
+        if PrunaClient._is_param_error(r.text):
             return DeterministicError(msg)
         return RuntimeError(msg)
 
@@ -505,16 +598,25 @@ class PrunaClient:
         return ""
 
     def _poll(self, model: str, job_id: str, proxies, poll_interval: int = 5,
-              timeout: int = 900) -> dict:
+              timeout: int = 900, session: requests.Session | None = None) -> dict:
+        """轮询任务状态。
+
+        ⚠️ 必须复用提交时那个 session —— 上游要求「提交」与「查询」共享会话，
+           否则 status 一律返回 404（表现为一直轮询到超时）。
+        ⚠️ 非 200 响应**不能静默跳过**（旧实现就是这么写的，导致 404 被无视、
+           `last` 始终为 {}，白等到 900s）。这里会记录并做有限容错。
+        """
         deadline = time.time() + timeout
-        last = {}
+        last: dict = {}
+        misses = 0
+        caller = session or requests
+        kw: dict = {} if session is not None else {"proxies": proxies}
+
         while time.time() < deadline:
-            r = requests.get(
-                status_url(model, job_id),
-                proxies=proxies,
-                timeout=60,
-            )
+            r = caller.get(status_url(model, job_id), timeout=60, **kw)
+
             if r.status_code == 200:
+                misses = 0
                 last = r.json()
                 if last.get("error"):
                     # 刚提交完的瞬间可能查不到，重试几次再放弃
@@ -527,7 +629,24 @@ class PrunaClient:
                     return last
                 if st in ("failed", "error", "canceled", "cancelled"):
                     raise RuntimeError(f"生成失败: {json.dumps(last, ensure_ascii=False)[:300]}")
+            else:
+                misses += 1
+                body = (r.text or "")[:200]
+                last = {"http_status": r.status_code, "body": body}
+                if r.status_code == 404:
+                    # 会话丢失的典型信号：连续 404 就别再空耗到超时了
+                    if misses >= 6:
+                        raise RuntimeError(
+                            f"任务 {job_id} 状态查询连续 {misses} 次 404 —— 上游要求提交与查询"
+                            f"共享会话(cookie)，持续出现说明会话没保持住。body={body}"
+                        )
+                elif r.status_code >= 500:
+                    log.warning("status 查询 %s 异常: HTTP %s %s", job_id, r.status_code, body)
+                else:
+                    log.warning("status 查询 %s: HTTP %s %s", job_id, r.status_code, body)
+
             time.sleep(poll_interval)
+
         raise TimeoutError(f"轮询超时（{timeout}s），最后状态: {json.dumps(last, ensure_ascii=False)[:200]}")
 
     # ---- 生成主入口 ----
@@ -723,14 +842,21 @@ class PrunaClient:
         if use_json is None:
             use_json = model in JSON_MODELS
 
+        # ⚠️ 上游要求「提交」与「状态查询」共享会话（cookie）——
+        #    用裸 requests 调用会让 status 一律返回 404。用一个 Session 贯穿提交+轮询。
+        session = requests.Session()
+        if proxies:
+            session.proxies.update({k: v for k, v in proxies.items() if v})
+
         if use_json:
             body = self._build_json(model, prompt, img_bytes, kb_bytes, params, lf_bytes)
-            r = requests.post(generate_url(model), json=body, proxies=proxies, timeout=180)
+            r = session.post(generate_url(model), json=body, timeout=180)
             tag = f"{model} JSON"
         else:
             fields, files = self._build_multipart(model, prompt, img_bytes, kb_bytes,
                                                   params, lf_bytes)
-            r = self._post(generate_url(model), fields=fields, files=files, proxies=proxies)
+            r = self._post(generate_url(model), fields=fields, files=files,
+                           proxies=proxies, session=session)
             tag = f"{model} multipart"
 
         self._check_limit(r)
@@ -756,7 +882,7 @@ class PrunaClient:
                 f"响应无 jobId: {json.dumps(d, ensure_ascii=False)[:300]}")
 
         try:
-            st = self._poll(model, job_id, proxies, timeout=900)
+            st = self._poll(model, job_id, proxies, timeout=900, session=session)
         except (RuntimeError, TimeoutError) as e:
             # 已经提交成功、配额已消耗 —— 绝不重试，否则会再烧一次额度
             raise TaskFailedAfterSubmit(f"任务 {job_id} 提交后失败: {e}") from e

@@ -818,11 +818,11 @@ const META = {
   'p-video-replace':   {kind:'video', img:'one',   note:'视频主体替换 · 需源视频+参考图', needImg:'必填', needVid:true},
   'p-video-edit':      {kind:'video', img:'multi', note:'视频编辑风格迁移 · 参考图可选', needVid:true},
   'p-video-2':         {kind:'video', img:'one',   note:'第二代视频模型 · 支持 720p/1080p'},
-  'p-video-2-pro':     {kind:'video', img:'firstlast', note:'顶配视频模型 · 支持首尾帧 · 仅 480p/768p · 每出口 5 次/天'},
+  'p-video-2-pro':     {kind:'video', img:'firstlast', note:'顶配视频模型 · 支持首尾帧 · 仅 480p/768p · 每出口 5 次/天（上游近期常临时下线）'},
 };
 const ASPECTS = ['16:9','9:16','4:3','3:4','3:2','2:3','1:1'];
-const RES_480  = ['480p','768p'];
-const RES_HD   = ['480p','720p','1080p'];
+const RES_480  = ['480p','768p'];    // p-video-2-pro
+const RES_HD   = ['720p','1080p'];   // p-video-2 / p-video —— 上游 2026-09 移除了 480p
 
 /* ================= 状态 ================= */
 let state = {
@@ -852,8 +852,21 @@ async function loadModels(){
   $('#f-model').innerHTML = list.map(id=>{
     const m = META[id] || {};
     const tag = m.kind === 'image' ? '图片' : '视频';
-    return `<option value="${id}">${id}  ·  ${tag}</option>`;
+    const info = byId[id] || {};
+    // 上游临时下线的模型（generation-status 里 disabled:true）标出来并禁选，
+    // 免得选了才在提交时报错、白扣配额
+    const off = info.disabled === true;
+    const rem = (info.remaining_per_ip != null)
+      ? `  · 余 ${info.remaining_per_ip}/${info.free_quota_per_ip}` : '';
+    return `<option value="${id}"${off ? ' disabled' : ''}>${id}  ·  ${tag}${rem}${
+      off ? '  · 上游已下线' : ''}</option>`;
   }).join('');
+  // 默认别落在已下线的模型上
+  const sel = $('#f-model');
+  if (sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].disabled) {
+    const firstOk = [...sel.options].find(o => !o.disabled);
+    if (firstOk) sel.value = firstOk.value;
+  }
   onModelChange();
 }
 
