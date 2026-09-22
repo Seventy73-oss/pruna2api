@@ -936,10 +936,19 @@ function onModelChange(){
   else resOpts = RES_480;
   fillSelect($('#f-res'), resOpts, resOpts.includes(prev) ? prev : resOpts[resOpts.length-1]);
 
-  // 图片模型不需要时长/模式
+  // 图片模型：上游只吃 aspect_ratio，其余参数一律隐藏
+  // 实测（2026-09）：给 p-image 传 resolution / duration / mode / prompt_upsampler /
+  // target_fps / seed 全部被静默忽略（连非法值都不报错），且响应里只回显
+  // prompt 与 aspect_ratio —— 说明这些字段它根本不认。显示出来只会误导。
   const isImg = m.kind === 'image';
-  $('#f-dur').closest('.field').style.display = isImg ? 'none' : '';
-  $('#f-mode').closest('.field').style.display = isImg ? 'none' : '';
+  for (const sel of ['#f-res', '#f-dur', '#f-mode', '#f-ups', '#f-seed']) {
+    const el = $(sel);
+    const field = el && el.closest('.field');
+    if (field) field.style.display = isImg ? 'none' : '';
+  }
+  // 图片模型只需宽高比，提示一下
+  const upHint = $('#f-ups-hint') || null;
+  if (upHint) upHint.textContent = isImg ? '图片模型仅支持宽高比' : '';
 }
 
 /* ================= 图片处理 ================= */
@@ -1053,7 +1062,8 @@ $('#btn-run').onclick = async ()=>{
     body.aspect_ratio = $('#f-ar').value;
   }
   const seed = $('#f-seed').value.trim();
-  if (seed) body.seed = +seed;
+  // seed 只对视频模型有效，图片模型传了也被忽略（实测）
+  if (seed && !isImg) body.seed = +seed;
 
   state.busy = true;
   const btn = $('#btn-run');
