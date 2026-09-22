@@ -784,11 +784,13 @@ class PrunaClient:
         field_name = IMAGE_FIELD.get(model)
         if field_name == "garment_images":
             # 试穿：第一张是模特，其余是服装
+            # ⚠️ 2026-09 上游把模特图字段从 image 改成了 person_image ——
+            #    仍传 image 会报 "person_image is required"
             for i, (b, m) in enumerate(img_bytes[1:]):
                 files.append(("garment_images", (f"g_{i}.{m.split('/')[-1]}", b, m)))
             if img_bytes:
                 b, m = img_bytes[0]
-                files.append(("image", (f"person.{m.split('/')[-1]}", b, m)))
+                files.append(("person_image", (f"person.{m.split('/')[-1]}", b, m)))
         elif field_name == "images":
             for i, (b, m) in enumerate(img_bytes):
                 files.append(("images", (f"img_{i}.{m.split('/')[-1]}", b, m)))
@@ -818,8 +820,9 @@ class PrunaClient:
         field_name = IMAGE_FIELD.get(model) or "image"
         if img_bytes:
             if field_name == "garment_images":
+                # 试穿：模特图字段是 person_image（2026-09 由 image 改名）
                 body["garment_images"] = [to_data_url(b, m) for b, m in img_bytes[1:]]
-                body["image"] = to_data_url(*img_bytes[0])
+                body["person_image"] = to_data_url(*img_bytes[0])
             elif field_name == "images":
                 body["images"] = [to_data_url(b, m) for b, m in img_bytes]
             else:

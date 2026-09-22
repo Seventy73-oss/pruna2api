@@ -186,6 +186,10 @@ class VideoGenRequest(BaseModel):
     target_fps: int | None = None
     seed: int | None = None
     last_frame: str | None = None
+    # p-video-avatar 必需：voice_script（口播文本）或 audio（音频 URL/dataURL）二选一
+    # ⚠️ 上游实测报错："Either voice_script or audio is required"
+    voice_script: str | None = Field(default=None, description="p-video-avatar 的口播文本")
+    audio: str | None = Field(default=None, description="p-video-avatar 的音频（URL/dataURL）")
     # 控制
     wait: bool = Field(default=True, description="true=同步等到完成；false=立即返回 task_id")
 
@@ -819,6 +823,9 @@ def videos_generations(req: VideoGenRequest, request: Request):
         "prompt_upsampler": req.prompt_upsampler,
         "target_fps": req.target_fps,
         "seed": req.seed,
+        # p-video-avatar 用（上游要求二选一）
+        "voice_script": req.voice_script,
+        "audio": req.audio,
     }
     imgs = list(req.images or [])
     payload = {
@@ -833,6 +840,14 @@ def videos_generations(req: VideoGenRequest, request: Request):
     n_imgs = len(imgs) + (1 if req.image else 0) + (1 if req.last_frame else 0)
     # 校验放在 task_create / spawn 之前：失败就退出，不建任务、不碰出口、不扣配额
     validate_request(req.model, req.prompt, n_imgs, bool(req.video))
+
+    # p-video-avatar 必须给 voice_script 或 audio（上游报 "Either voice_script
+    # or audio is required"，且被包成 500，提前拦掉免得白跑出口）
+    if req.model == "p-video-avatar" and not (req.voice_script or req.audio):
+        raise HTTPException(400, {"error": {
+            "message": "p-video-avatar 需要 voice_script（口播文本）或 audio（音频）",
+            "type": "invalid_request_error", "param": "voice_script",
+            "code": "invalid_request"}})
     task_create(task_id, req.model, kind, req.prompt or "", params, n_imgs)
 
     base = _public_base(request)

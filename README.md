@@ -325,6 +325,46 @@ if r.status_code >= 500 and _is_param_error(r.text):
 服务的做法：提交前查 `generation-status`，`disabled: true` 就拦掉，并让 `/v1/models`
 把 `disabled` 透出给前端（控制台会把该模型禁选）。
 
+### 10. `p-image-try-on` 的模特图字段改名了
+
+上游把模特图字段从 `image` 改成了 **`person_image`**（服装图仍是 `garment_images`）：
+
+```python
+# ❌ 旧：报 "person_image is required"
+files.append(("image", ...))
+# ✅ 新
+files.append(("person_image", ...))
+```
+
+实测：传 `person_image` + `garment_images` 能正常提交；只传 `person_image` 会报
+`garment_images must include at least one image`。
+
+> 注意用纯色图测这个模型会得到 `Prediction failed: No detections found` ——
+> 那是**业务失败**（没检测到人/衣服），说明字段已经对了，别误判成协议问题。
+
+### 11. `p-video-avatar` 新增必需字段 `voice_script` / `audio`
+
+```
+{"error":"Either voice_script or audio is required"}
+```
+
+二选一必填。服务已支持 `voice_script`（文本）与 `audio`（音频 URL/dataURL），
+并在提交前拦截缺字段的请求（避免白跑一个出口）。
+
+**对照排查用的模型字段表**（2026-09 实测）：
+
+| 模型 | 必需输入 |
+|---|---|
+| `p-image` / `p-image-ideogram` | `prompt` |
+| `p-image-edit` | `prompt` + `images[]` |
+| `p-image-upscale` | `image` |
+| `p-image-try-on` | **`person_image`** + `garment_images[]` |
+| `p-video` / `p-video-2` | `prompt`（resolution 见 #7） |
+| `p-video-avatar` | **`image` + `voice_script` 或 `audio`** |
+| `p-video-animate` | `image` + `video` + `instruction_prompt` |
+| `p-video-replace` | `image` + `video` + `instruction_prompt` |
+| `p-video-edit` | `video`（+ `prompt` 可选） |
+
 ## 配置
 
 所有配置走环境变量（见 `.env.example`）：
