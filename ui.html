@@ -146,8 +146,20 @@ main{flex:1;padding:calc(4px * var(--u)) calc(34px * var(--u)) calc(72px * var(-
   color:var(--fg-2);font-weight:600;letter-spacing:-.01em;
 }
 .grid{display:grid;gap:calc(14px * var(--u))}
-.g2{grid-template-columns:1fr 1fr}
-.g3{grid-template-columns:repeat(3,1fr)}
+/* minmax(0,1fr) 而不是 1fr：1fr 的最小尺寸是 auto，会被内容（大图/长URL）撑破列宽 */
+.g2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.grid>*{min-width:0}
+
+/* 全局兜底：任何图片/视频都不得超过其容器 —— 否则原图多大就撑多大、顶破布局 */
+img,video{max-width:100%;height:auto}
+
+/* 结果区的媒体：再限高度并居中，避免竖版视频把页面拉得很长 */
+#result img,#result video{
+  display:block;margin:0 auto;
+  max-height:62vh;object-fit:contain;
+  border-radius:var(--r-md);background:var(--panel-2);
+}
 .g4{grid-template-columns:repeat(auto-fit,minmax(calc(220px * var(--u)),1fr))}
 
 /* 指标卡：去边框，靠数字尺度说话 */
@@ -230,8 +242,8 @@ td.nowrap,th.nowrap{white-space:nowrap}
              text-overflow:ellipsis;max-width:11em}
 .tk .hd .exit{margin-left:auto;color:var(--fg-3);white-space:nowrap;font-size:calc(13px * var(--u))}
 .tk .bd{padding:calc(15px * var(--u))}
-.tk .bd img,.tk .bd video{width:100%;border-radius:var(--r-sm);display:block;
-                          background:var(--panel-2);aspect-ratio:16/9;object-fit:contain}
+.tk .bd img,.tk .bd video{width:100%;max-height:min(58vh,520px);border-radius:var(--r-sm);
+                          display:block;background:var(--panel-2);object-fit:contain}
 .tk .err{color:var(--bad);font-size:calc(13.5px * var(--u));word-break:break-all}
 .badge{font-size:calc(12.5px * var(--u));padding:calc(3px * var(--u)) calc(9px * var(--u));
        border-radius:var(--r-sm);border:1px solid var(--line-2);color:var(--fg-2);
